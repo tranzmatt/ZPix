@@ -90,7 +90,8 @@ WARMING_UP_RUN = 3
 The compiler runs each shape before keeping a kernel for it, holding what a step
 holds and a copy beside, in blocks whose sizes the cached ones can't serve. One
 generation in a resolution's life pays this, and the run is counted several
-times over for it.
+times over for it. Only the first of the session for that shape, though:
+`compiled_shapes` says which ones the session has compiled already.
 
 Measured, not reasoned: a denoiser settling at 4.2GB was watched to hold 5.9GB
 while compiling, and to have the allocator take 7.8GB of an 8GB card to place
@@ -330,14 +331,16 @@ class ImagePipeline:
         """What this model's architecture was read to ask of the GPU per pixel,
         `None` while none is loaded or where it couldn't be walked."""
 
-        self.warmed_up_streams: set[int] = set()
-        """Stream sizes this model has already compiled for, in pixels.
+        self.compiled_shapes: set[str] = set()
+        """Shapes this session has compiled for, as `stream_shape` keys them.
 
-        The kernels are compiled per shape, so a resolution never generated is a
-        resolution still to compile, whatever the ones before it cost. Emptied by
-        a load and by a weight edit, both of which the compiled graphs don't
-        survive.
+        The kernels are compiled per shape, so a shape never generated is a shape
+        still to compile, whatever the ones before it cost. Kept for the session
+        only: whatever compiles them next time may not be what did.
         """
+
+        self.warming_shape: str | None = None
+        """Shape the generation under way compiles for, `None` if it compiles none."""
 
         self.warms_up_next_run = True
         """Is the coming generation the one that compiles for its resolution?"""
@@ -490,7 +493,7 @@ class ImagePipeline:
         self.free_memory, self.total_memory = memory_info or (0, 0)
         self.streams_denoiser = False
         self.settled = 0
-        self.warmed_up_streams = set()
+        self.warming_shape = None
         self.warms_up_next_run = True
         self.warmed_up_run = False
         self.kernel_cache_counts = {}
@@ -821,13 +824,23 @@ class ImagePipeline:
 
         return self.run_memory.encode_bytes(pixels)
 
-    def watch_run(self, stream_pixels: int) -> None:
-        """Note what the coming generation is to be read against.
+    def stream_shape(self) -> str:
+        """What the kernels of the coming run are compiled for, as recorded.
 
-        Args:
-            stream_pixels: Pixels the denoiser reads at every step.
+        The denoiser's footprint, adapters left out, stands for the model: an
+        adapter given or taken back leaves the shapes compiled for. The picture is
+        told by its sides, a portrait and a landscape of as many pixels compiling
+        apart, and the references by what they add to the stream.
         """
+        width, height = self.picture
+        model = self.denoiser_footprint() - self.adapter_footprint()
+
+        return f"{model}:{width}x{height}+{self.reference_pixels}"
+
+    def watch_run(self) -> None:
+        """Note what the coming generation is to be read against."""
         self.warmed_up_run = self.warms_up_next_run
+        self.warming_shape = self.stream_shape() if self.warms_up_next_run else None
 
         if self.warms_up_next_run:
             self.kernel_cache_counts = count_cached_kernels()
@@ -836,8 +849,21 @@ class ImagePipeline:
                 "Next generation will be longer."
             )
 
-        self.warmed_up_streams.add(stream_pixels)
         self.warms_up_next_run = False
+
+    def remember_compiled(self) -> None:
+        """Record the shape the generation just finished compiled for, if any.
+
+        Only once the generation is over: one interrupted may have left kernels
+        out of the caches, and its shape is then weighed as compiling again.
+        """
+        if self.warming_shape is not None:
+            self.compiled_shapes.add(self.warming_shape)
+            self.warming_shape = None
+
+    def forget_compiled(self) -> None:
+        """Forget every shape compiled for, the caches holding them being cleared."""
+        self.compiled_shapes.clear()
 
     def log_compiled_kernels(self) -> None:
         """Say what the generation a pipeline warmed up on wrote to each cache.
@@ -928,9 +954,9 @@ class ImagePipeline:
                 f"{self.input_name}."
             )
 
-        # Compiled per shape, so a size never generated is a size still to
+        # Compiled per shape, so a shape not compiled for yet is a shape still to
         # compile. Settled before the seat below, which is weighed on it.
-        self.warms_up_next_run = stream_pixels not in self.warmed_up_streams
+        self.warms_up_next_run = self.stream_shape() not in self.compiled_shapes
 
         # What the run wants beyond the weights, and what the pipeline keeps from
         # it: all that the denoiser's seat is weighed against.
@@ -978,7 +1004,7 @@ class ImagePipeline:
         # references, it runs after the encoders, whose compilation then goes
         # unreported rather than walk both caches before every edit.
         if self.offload_strategy is not None and not waits_for_references:
-            self.watch_run(stream_pixels)
+            self.watch_run()
 
     def stream_denoiser_if_needed(self, pixels: int) -> None:
         """Take the denoiser off the GPU when the picture leaves it no seat.
@@ -1858,10 +1884,10 @@ class ImagePipeline:
         try:
             yield
         finally:
-            # The edit outlives every compiled graph, so the coming run warms up
-            # again at every size. Settled first: the projection below weighs it.
-            self.warmed_up_streams.clear()
-            self.warms_up_next_run = True
+            # An adapter leaves the shapes compiled for, so the coming run warms up
+            # only if this picture never was. Settled first: the projection below
+            # weighs it.
+            self.warms_up_next_run = self.stream_shape() not in self.compiled_shapes
 
             # Read again under the footprint the edit moved. The architecture is
             # the one it was, adapters changing no shape the walk reads, but that

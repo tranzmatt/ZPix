@@ -186,10 +186,13 @@ def generate(
         except UnicodeDecodeError:
             # A corrupted Triton cache can cause an UnicodeDecodeError.
             rmtree(Path.home() / ".triton", ignore_errors=True)
+            image_pipe.forget_compiled()
             gr.Warning(t("Cleared Triton cache as it may be corrupted."), duration=6)
 
             gr.Info(t("Regenerating same image..."), duration=8)
             image = pipe(**pipe_kwargs).images[0]  # ty: ignore
+
+        image_pipe.remember_compiled()
 
         if inpaint_source:
             image = keep_outside_region(inpaint_source, image, lasso)  # ty: ignore
@@ -210,7 +213,10 @@ def generate(
                     region_steps,
                 )
                 region_kwargs["num_inference_steps"] = region_steps
-                return pipe(**pipe_kwargs | region_kwargs).images[0]  # ty: ignore
+                region_image = pipe(**pipe_kwargs | region_kwargs).images[0]  # ty: ignore
+                image_pipe.remember_compiled()
+
+                return region_image
 
             image = high_res_fix(image, mask, high_res_fix_factor, denoise)
 

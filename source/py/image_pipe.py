@@ -19,6 +19,7 @@ from diffusers.hooks.group_offloading import (
     _LAZY_PREFETCH_GROUP_OFFLOADING,
     apply_group_offloading,
 )
+from diffusers.models.modeling_utils import ModelMixin
 from diffusers.modular_pipelines.components_manager import custom_offload_with_hook
 from diffusers.modular_pipelines.modular_pipeline import ModularPipeline
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
@@ -453,7 +454,10 @@ class ImagePipeline:
 
             # Picked process-wide, not per pipeline: a swap would otherwise
             # inherit whatever the family before it chose.
-            self.instance.transformer.set_attention_backend("native")
+            denoiser = self.denoiser()
+
+            if denoiser is not None:
+                denoiser.set_attention_backend("native")
 
             if model.family in ("Z-Image", "FLUX", "FLUX.2"):
                 try:
@@ -683,7 +687,7 @@ class ImagePipeline:
 
         return free_memory
 
-    def denoiser(self) -> torch.nn.Module | None:
+    def denoiser(self) -> ModelMixin | None:
         """The component a run calls at every step, `None` where there is none."""
         if self.instance is None:
             return None

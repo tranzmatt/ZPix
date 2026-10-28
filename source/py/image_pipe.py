@@ -84,28 +84,6 @@ than for a shortcoming of it. Above about twelve gigabytes of card it costs
 nothing, every model here sitting whole with room to spare.
 """
 
-ADAPTED_RUN = 3
-"""What a run with an adapter is weighed as asking against one without, per run.
-
-An adapter wraps a layer rather than replacing it: the input stays alive for two
-paths, and two outputs are added where one was written. That is a cost per
-activation, following the resolution and the layers wrapped rather than the
-adapter's own weight, so a small adapter over the same layers asks nearly what a
-large one does. Weighed on the footprint instead, this changed no decision.
-
-It stands for more than the adapter, though, and the figure says so: a 75MB one
-was watched to take a 1080p denoiser seated with two gigabytes to spare into
-paging, from 4.5 to 27.9 seconds a step from the third generation on and for the
-rest of the session. The same denoiser without it held five generations. What
-the reserve doesn't cover, at that resolution, is thin enough that an adapter
-crosses it, so this is charged where the crossing happens rather than to every
-picture: read as the adapter's own cost it would be several times too large.
-
-Conservative on purpose, the two errors costing nothing alike: refusing a seat
-that would have held costs half a second a step, granting one that doesn't has
-the driver page the card at twenty-three.
-"""
-
 WARMING_UP_RUN = 3
 """What a generation that compiles asks against a settled one, per run.
 
@@ -1095,18 +1073,18 @@ class ImagePipeline:
         """What the coming run is weighed as asking beyond the weights, in bytes.
 
         The margin its resolution settled, several times over while the graphs
-        are still to compile, and doubled again where an adapter wraps the
-        layers. `WARMING_UP_RUN` and `ADAPTED_RUN` say what each is measured on.
+        are still to compile. `WARMING_UP_RUN` says what that is measured on.
 
-        The cache is added after both: compiling doesn't grow it, and an adapter
-        leaves the width of a key or a value as it was.
+        An adapter needs no factor: its weights are in the denoiser's footprint,
+        and the walk counts its layers.
+
+        The cache is added after: compiling doesn't grow it.
 
         Charged to the seat alone: the reserve every arrival leaves behind
         answers another question, and one nothing can reach empties the GPU on
         each of them.
         """
         run = self.run_margin * (WARMING_UP_RUN if self.warms_up_next_run else 1)
-        run = run * ADAPTED_RUN if self.adapter_footprint() else run
 
         return run + self.cache_margin
 

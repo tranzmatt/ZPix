@@ -164,14 +164,13 @@ def set_lora_strength(
 
     Raises:
         gr.Error: If the pipeline doesn't support LoRA
-            or no LoRA is loaded on its transformer.
+            or no LoRA is loaded on any of its components.
     """
     if not isinstance(pipe, LoraBaseMixin):
         raise gr.Error("Pipeline doesn't support LoRA.")
 
-    adapters = pipe.get_list_adapters()
-
-    if "transformer" not in adapters or "lora_1" not in adapters["transformer"]:
+    # Looked for in every component: the denoiser isn't named alike by every family.
+    if not any("lora_1" in names for names in pipe.get_list_adapters().values()):
         raise gr.Error("No LoRA loaded.")
 
     pipe.set_adapters("lora_1", strength)

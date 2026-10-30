@@ -8,6 +8,35 @@ LORA_MATRICES = {
     "lora_up.weight": "lora_down.weight",
 }
 
+# LoRA matrix spellings Diffusers leaves unmatched, mapped to the ones it matches.
+LORA_SPELLINGS = {
+    ".lora.down.": ".lora_A.",
+    ".lora.up.": ".lora_B.",
+}
+
+
+def _unify_spellings(state: dict[str, Tensor]) -> dict[str, Tensor]:
+    """Spell the matrices of a LoRA the way Diffusers matches them.
+
+    A trainer can mix spellings within a file. PEFT drops the layers it can't
+    match and only warns about it, so the LoRA would load partly applied.
+
+    Args:
+        state: State dict of a LoRA.
+
+    Returns:
+        A state dict with the same tensors, under unified keys.
+    """
+    unified = {}
+
+    for key, tensor in state.items():
+        for spelling, matched_spelling in LORA_SPELLINGS.items():
+            key = key.replace(spelling, matched_spelling)
+
+        unified[key] = tensor
+
+    return unified
+
 
 def _fold_alphas(state: dict[str, Tensor]) -> dict[str, Tensor]:
     """Fold the `.alpha` scalars of a LoRA into its up matrices, then drop them.
@@ -57,6 +86,8 @@ def to_diffusers(state: dict[str, Tensor], family: str) -> dict[str, Tensor]:
     """
     if family not in ("FLUX.2", "Krea 2"):
         return state
+
+    state = _unify_spellings(state)
 
     # Diffusers FLUX.2 and Krea 2 LoRA converters don't handle .alpha keys.
     state = _fold_alphas(state)

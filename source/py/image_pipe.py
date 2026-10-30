@@ -421,6 +421,13 @@ class ImagePipeline:
             else:
                 raise
 
+        # Compiled graphs guard on this flag, which an adapter clears on the
+        # layers it wraps: left set, each adapter compiles them again, unseen by
+        # the projection of the run.
+        for component in self.instance.components.values():
+            if isinstance(component, torch.nn.Module):
+                component.requires_grad_(False)
+
         # On NVIDIA, AMD & Intel ARC GPUs:
         if triton_is_available and (
             torch.cuda.is_available() or torch.xpu.is_available()
